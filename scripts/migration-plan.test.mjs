@@ -58,7 +58,14 @@ test("non-.sql entries are dropped (readdir also yields the auth/ directory)", (
 
 test("the auth schema ships outside the globbed directory", () => {
   const migrationsDir = join(projectRoot(), "migrations");
-  assert.deepEqual(pendingMigrations(readdirSync(migrationsDir), []), []);
+  // La app ya tiene migraciones propias (estadísticas, motor free). La
+  // invariant que importa: ninguna migración aplicable es el esquema de
+  // auth — ese vive solo en migrations/auth/ y sube solo con sign-in.
+  const entries = readdirSync(migrationsDir);
+  assert.deepEqual(
+    entries.filter((name) => name.endsWith(".sql") && name.includes("auth")),
+    [],
+  );
   assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));
 });
 

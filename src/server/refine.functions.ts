@@ -1,11 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { cloudBudgetOpen } from "@/server/stats.functions";
 
+// Prompt corto a propósito: menos tokens por refuerzo.
 const PROMPT =
-  "Remove stickers, emoji, captions, decorative frames and graphic overlays. " +
-  "Reduce beauty-filter smoothing and heavy color grading so skin, light and texture look like a natural photograph of the same scene. " +
-  "Keep the same people, faces, pose, clothing, background and framing. " +
-  "Do not add or remove clothing. Do not add nudity. Do not change identity. Do not invent new objects or turn the photo into a video.";
+  "Remove stickers, emoji, captions, frames and graphic overlays. Undo heavy filters and beauty smoothing for a natural photographic look. " +
+  "Keep the same people, pose, clothing, background and framing. " +
+  "Do not add or remove clothing. Do not add nudity. Do not change identity. Do not invent objects or make a video.";
 
 let lastCall = 0;
 

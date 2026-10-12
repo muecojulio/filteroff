@@ -3,7 +3,7 @@ export type HistoryItem = {
   at: number;
   kind: "photo" | "video";
   label: string;
-  engine: "local" | "cloud";
+  engine: "local" | "free" | "cloud";
   thumb: string;
 };
 
@@ -40,7 +40,7 @@ function isItem(value: unknown): value is HistoryItem {
     typeof row.at === "number" &&
     (row.kind === "photo" || row.kind === "video") &&
     typeof row.label === "string" &&
-    (row.engine === "local" || row.engine === "cloud") &&
+    (row.engine === "local" || row.engine === "free" || row.engine === "cloud") &&
     typeof row.thumb === "string" &&
     row.thumb.startsWith("data:image/")
   );

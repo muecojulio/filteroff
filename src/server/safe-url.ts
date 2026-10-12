@@ -79,8 +79,53 @@ export function sniffMedia(bytes: Uint8Array, headerType: string): { mime: strin
   ) {
     return { mime: "image/webp", kind: "photo" };
   }
-  if (b.length >= 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return { mime: "video/mp4", kind: "video" };
+  // AVIF/HEIF comparten caja ftyp con mp4: se distinguen por la marca.
+  if (b.length >= 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+    const brand = String.fromCharCode(b[8]!, b[9]!, b[10]!, b[11]!);
+    if (brand === "avif" || brand === "avis") return { mime: "image/avif", kind: "photo" };
+    return { mime: "video/mp4", kind: "video" };
+  }
   if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return { mime: "video/webm", kind: "video" };
+  return null;
+}
+
+/**
+ * Si el enlace es una página (no el archivo directo), se extrae el medio
+ * publicada en sus metadatos — el truco clásico de los descargadores públicos
+ * de GitHub: og:video / og:image / twitter:* y las etiquetas <video> / <img>.
+ */
+export function findHtmlMediaUrl(html: string, baseUrl: string): string | null {
+  const head = html.slice(0, 400_000);
+  const metaPattern = /<meta[^>]+>/gi;
+  const candidates: { url: string; rank: number }[] = [];
+  let meta: RegExpExecArray | null;
+  while ((meta = metaPattern.exec(head)) !== null) {
+    const tag = meta[0];
+    const property = /(?:property|name)\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase() ?? "";
+    const content = /content\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] ?? "";
+    if (!property || !content || content.startsWith("data:")) continue;
+    const rank = ["og:video:secure_url", "og:video:url", "og:video", "twitter:player:stream", "og:image:secure_url", "og:image", "twitter:image"].indexOf(property);
+    if (rank >= 0) candidates.push({ url: content, rank });
+  }
+  const videoTag = /<video[^>]+src\s*=\s*["']([^"']+)["']/i.exec(head)?.[1];
+  if (videoTag && !videoTag.startsWith("data:")) candidates.push({ url: videoTag, rank: 0 });
+  candidates.sort((a, b) => a.rank - b.rank);
+  for (const candidate of candidates) {
+    try {
+      const resolved = new URL(candidate.url, baseUrl);
+      if (resolved.protocol === "https:" || resolved.protocol === "http:") return resolved.toString();
+    } catch {
+      // URL rota en la página: siguiente candidata.
+    }
+  }
+  const imgTag = /<img[^>]+src\s*=\s*["'](https?:\/\/[^"']+)["']/i.exec(head)?.[1];
+  if (imgTag) {
+    try {
+      return new URL(imgTag, baseUrl).toString();
+    } catch {
+      return null;
+    }
+  }
   return null;
 }
 
@@ -96,7 +141,7 @@ export async function readCapped(response: Response): Promise<Uint8Array> {
     total += value.byteLength;
     if (total > MAX_BYTES) {
       await reader.cancel();
-      throw new MediaReject("El archivo pasa de 8 MB. Prueba con uno más corto o ábrelo desde el teléfono.");
+      throw new MediaReject("El archivo pasa de 25 MB. Prueba con uno más corto o ábrelo desde el teléfono.");
     }
     chunks.push(value);
   }

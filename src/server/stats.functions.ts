@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
 const KINDS = new Set(["photo", "video"]);
-const ENGINES = new Set(["local", "cloud"]);
+const ENGINES = new Set(["local", "free", "cloud"]);
 
 export const recordRestore = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
