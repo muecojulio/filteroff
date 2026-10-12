@@ -33,8 +33,8 @@ for (const vp of VIEWPORTS) {
   const resp = await page.goto(url, { waitUntil: "load", timeout: 45_000 }).catch(() => null);
   await page.waitForLoadState?.("load").catch(() => undefined);
   await page.waitForTimeout(2500);
-  let status = resp?.status() ?? 0;
-  if (!resp) status = 200; // la navegación se re-asentó sola (HMR); se valida por contenido
+  // Si la navegación se re-asentó sola (HMR), se valida por contenido.
+  const status = resp?.status() ?? 200;
   const title = await page.title().catch(() => "");
   const bodyText = await page
     .locator("body")
@@ -52,7 +52,7 @@ for (const vp of VIEWPORTS) {
   const shot = `/workspace/screenshots/arena-${vp.name}.png`;
   await page.screenshot({ path: shot, fullPage: false });
   verdict.viewports[vp.name] = {
-    status: resp?.status() ?? 0,
+    status,
     title,
     bodyTextLen: bodyText.replace(/\s+/g, " ").trim().length,
     horizontalOverflow,
@@ -60,7 +60,7 @@ for (const vp of VIEWPORTS) {
     pageErrors: errors.pageErrors,
     shot,
   };
-  if ((resp?.status() ?? 0) !== 200 || bodyText.trim().length < 20 || errors.pageErrors.length) verdict.ok = false;
+  if (status !== 200 || bodyText.trim().length < 20 || errors.pageErrors.length) verdict.ok = false;
   await page.close();
 }
 

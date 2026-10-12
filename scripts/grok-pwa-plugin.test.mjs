@@ -8,7 +8,7 @@ import {
   appNameFromHost,
   createHeadInjector,
   grokXCreatorHeadTags,
-  injectGrokPwaHead,
+  injectGrokPwaHead as injectGrokPwaHeadRaw,
   isDocumentPath,
   isInstallQuery,
   publicAppHost,
@@ -20,6 +20,14 @@ import {
 import { renderInstallPage } from "./grok-pwa-plugin.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Sin cwd explícito el plugin lee src/lib/og/site.json del proceso; con el
+// site.json real de la plantilla los fixtures dejaban de mandar. Cada prueba
+// puede sobreescribir el cwd pasándolo en el contexto.
+const ISOLATED_CWD = mkdtempSync(join(tmpdir(), "grok-pwa-plugin-test-"));
+function injectGrokPwaHead(html, ctx = {}) {
+  return injectGrokPwaHeadRaw(html, { cwd: ISOLATED_CWD, ...ctx });
+}
 
 test("injects before </head>", () => {
   const out = injectGrokPwaHead("<html><head><title>x</title></head><body></body></html>");
@@ -370,7 +378,7 @@ test("injects into documents with no head element", () => {
 });
 
 test("streaming injector matches </HEAD> case-insensitively", () => {
-  const injector = createHeadInjector({ appName: "Wild Race" });
+  const injector = createHeadInjector({ appName: "Wild Race", cwd: ISOLATED_CWD });
   const chunks = [
     ...injector.push("<html><HEAD><title>x</title></HE"),
     ...injector.push("AD><body>hello</body></html>"),

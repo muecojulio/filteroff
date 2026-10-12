@@ -58,7 +58,7 @@ export const freeRefine = createServerFn({ method: "POST" })
             kind: "photo",
             image: blob,
             filename: "filteroff.jpg",
-            timeoutMs: 70_000,
+            timeoutMs: 60_000,
           });
           const sniffed = sniffMedia(job.bytes, job.mime);
           if (!sniffed || sniffed.kind !== "photo") continue;

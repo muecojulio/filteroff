@@ -8,9 +8,10 @@
  *
  *   1. GET  {root}/config                      → api_prefix, dependencies, components
  *   2. POST {root}{prefix}/upload  (multipart) → rutas de archivo en el servidor
- *   3. POST {root}{prefix}/queue/join          → { event_id }  (payload: data, fn_index, session_hash)
- *   4. GET  {root}{prefix}/queue/data?session_hash=… (SSE) → msg: process_completed
- *   5. GET  {root}{prefix}/file={path}         → bytes del resultado
+ *   3. GET  {root}{prefix}/queue/data?session_hash=… (SSE, se abre ANTES del join)
+ *   4. POST {root}{prefix}/queue/join          → { event_id }  (data, fn_index, session_hash)
+ *   5. Lectura del stream hasta msg: process_completed
+ *   6. GET  {root}{prefix}/file={path}         → bytes del resultado
  *
  * Apps viejas (Gradio 3) exponen lo mismo sin el prefijo `/gradio_api`; se
  * prueban los dos prefijos.
@@ -27,6 +28,8 @@ export type GradioDependency = {
   id?: number;
   api_name?: string | null;
   trigger?: string;
+  /** Config moderno: pares [componente, evento], p. ej. [12, "click"]. */
+  targets?: [number, string][];
   inputs?: number[];
   outputs?: number[];
 };
@@ -155,10 +158,17 @@ export function buildJoinInputs(
   components: GradioComponent[],
   inputIds: number[],
 ): unknown[] {
+  // La imagen va al PRIMER input de imagen (no siempre es el slot 0).
+  const imageSlot = inputTypes.findIndex((type) => IMAGE_INPUT_TYPES.has(type));
+  const fileData = { path: uploadedPath, orig_name: filename, meta: { _type: "gradio.FileData" } };
   return inputTypes.map((type, index) => {
     const props = components.find((comp) => comp.id === inputIds[index])?.props ?? {};
-    if (index === 0 && IMAGE_INPUT_TYPES.has(type)) {
-      return { path: uploadedPath, orig_name: filename, meta: { _type: "gradio.FileData" } };
+    if (index === imageSlot) {
+      // El editor de imagen envuelve el archivo en su valor compuesto.
+      if (type === "imageeditor") {
+        return { background: fileData, layers: [], composite: null };
+      }
+      return fileData;
     }
     switch (type) {
       case "image":
@@ -168,8 +178,11 @@ export function buildJoinInputs(
         return null;
       case "radio":
       case "dropdown": {
-        const choices = props.choices as { value?: unknown }[] | undefined;
-        return props.value ?? choices?.[0]?.value ?? null;
+        // choices llega como [[etiqueta, valor], …] (tuplas) o [{value}, …].
+        const choices = props.choices as ([unknown, unknown] | { value?: unknown })[] | undefined;
+        const firstChoice = choices?.[0];
+        const choiceValue = Array.isArray(firstChoice) ? firstChoice[1] : firstChoice?.value;
+        return props.value ?? choiceValue ?? null;
       }
       case "number":
       case "slider":
@@ -199,30 +212,33 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 }
 
-/** Trabajo completo contra una app Gradio: config → upload → join → SSE → descarga. */
+/** Trabajo completo contra una app Gradio: config → upload → SSE → join → descarga. */
 export async function runGradioImageJob(options: GradioJobOptions): Promise<GradioJobResult> {
   const budget = options.timeoutMs ?? 75_000;
   const deadline = Date.now() + budget;
   const left = () => Math.max(1_000, deadline - Date.now());
   const root = options.root.replace(/\/+$/, "");
 
-  // 1. Config pública (con y sin el prefijo nuevo).
-  let config: GradioConfig | null = null;
-  let apiPrefix = "";
-  for (const prefix of ["/gradio_api", ""]) {
-    try {
-      const response = await fetchWithTimeout(`${root}${prefix}/config`, {}, Math.min(9_000, left()));
-      if (!response.ok) continue;
-      const parsed = (await response.json()) as GradioConfig;
-      if (!parsed || typeof parsed !== "object") continue;
-      config = parsed;
-      apiPrefix = typeof parsed.api_prefix === "string" ? parsed.api_prefix : prefix;
-      break;
-    } catch {
-      // App dormida o inalcanzable: se prueba el otro prefijo.
+  // 1. Config pública: ambos prefijos en paralelo, gana el primero que
+  // responda (el timeout amplio deja despertar a un Space dormido).
+  const configAttempts = ["/gradio_api", ""].map(async (prefix) => {
+    const response = await fetchWithTimeout(`${root}${prefix}/config`, {}, Math.min(18_000, left()));
+    if (!response.ok) throw new Error(`config-${response.status}`);
+    const parsed = (await response.json()) as GradioConfig;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.dependencies)) {
+      throw new Error("config-shape");
     }
+    const prefixResolved = typeof parsed.api_prefix === "string" && parsed.api_prefix ? parsed.api_prefix : prefix;
+    return { config: parsed, apiPrefix: prefixResolved };
+  });
+  let winner: { config: GradioConfig; apiPrefix: string };
+  try {
+    winner = await Promise.any(configAttempts);
+  } catch {
+    throw new Error("config");
   }
-  if (!config) throw new Error("config");
+  const config = winner.config;
+  const apiPrefix = winner.apiPrefix;
   const endpoint = pickImageEndpoint(config, options.kind);
   if (!endpoint) throw new Error("endpoint");
 
@@ -239,8 +255,18 @@ export async function runGradioImageJob(options: GradioJobOptions): Promise<Grad
   const uploadedPath = Array.isArray(uploaded) && typeof uploaded[0] === "string" ? uploaded[0] : null;
   if (!uploadedPath) throw new Error("upload");
 
-  // 3. Join de la cola.
+  // 3. Stream SSE primero, join después: el servidor suelta los eventos que
+  // llegan antes de que el stream esté conectado (orden del cliente oficial).
   const sessionHash = Math.random().toString(36).slice(2);
+  const streamSignal = AbortSignal.timeout(left());
+  const streamResponse = await fetch(
+    `${root}${apiPrefix}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
+    { signal: streamSignal, headers: { Accept: "text/event-stream" } },
+  );
+  if (!streamResponse.ok || !streamResponse.body) throw new Error("stream");
+  const reader = streamResponse.body.getReader();
+
+  // 4. Join de la cola.
   const componentById = config.components ?? [];
   const data = buildJoinInputs(
     endpoint.inputTypes,
@@ -259,27 +285,35 @@ export async function runGradioImageJob(options: GradioJobOptions): Promise<Grad
     },
     Math.min(12_000, left()),
   );
-  if (!joinResponse.ok) throw new Error(`join-${joinResponse.status}`);
+  if (!joinResponse.ok) {
+    reader.cancel().catch(() => undefined);
+    throw new Error(`join-${joinResponse.status}`);
+  }
 
-  // 4. Stream de eventos (SSE) hasta process_completed o close_stream.
-  const streamSignal = AbortSignal.timeout(left());
-  const streamResponse = await fetch(
-    `${root}${apiPrefix}/queue/data?session_hash=${encodeURIComponent(sessionHash)}`,
-    { signal: streamSignal },
-  );
-  if (!streamResponse.ok || !streamResponse.body) throw new Error("stream");
+  // 5. Lectura del stream hasta process_completed o close_stream.
   const payloads: unknown[] = [];
   let closed = false;
-  const reader = streamResponse.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // read() contra el presupuesto: el timer se limpia SIEMPRE en cada
+  // iteración (si no, cada vuelta deja un setTimeout colgado hasta `left()`).
+  const readWithBudget = (): Promise<{ done?: boolean; value?: Uint8Array } | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const race = Promise.race([
+      reader.read(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), left());
+      }),
+    ]);
+    // El timer se limpia cuando la carrera se asienta (read ganó o venció).
+    return race.finally(() => clearTimeout(timer)) as Promise<{
+      done?: boolean;
+      value?: Uint8Array;
+    } | null>;
+  };
   try {
     while (!closed) {
-      const chunkWait = Promise.race([
-        reader.read(),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), left())),
-      ]);
-      const chunk = (await chunkWait) as { done?: boolean; value?: Uint8Array } | null;
+      const chunk = await readWithBudget();
       if (!chunk) break; // Se acabó el presupuesto.
       if (chunk.done) break;
       buffer += decoder.decode(chunk.value, { stream: true });
@@ -298,7 +332,7 @@ export async function runGradioImageJob(options: GradioJobOptions): Promise<Grad
     reader.releaseLock?.();
   }
 
-  // 5. Descarga del resultado.
+  // 6. Descarga del resultado.
   const file = extractResultFileData(payloads);
   if (!file) throw new Error("result");
   const resultUrl = gradioFileUrl(root, apiPrefix, file);
