@@ -12,7 +12,6 @@ import {
   Trash2,
   WandSparkles,
   Sparkles,
-  ChevronRight,
   Cpu,
   Lock,
   Eye,
@@ -20,6 +19,8 @@ import {
   TriangleAlert,
   Info,
   Shuffle,
+  QrCode,
+  ShieldCheck,
 } from "lucide-react";
 import { clearHistory, readHistory, writeHistory, type HistoryItem } from "@/lib/history";
 import { restoreRaster, type Raster } from "@/lib/restore/engine";
@@ -39,8 +40,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { PressButton, type PressStatus } from "@/components/ui/press-button";
 import { Toggle } from "@/components/ui/toggle";
 import { Slider } from "@/components/ui/slider";
-import { TabBar } from "@/components/ui/tab-bar";
-import { useTabIndicator } from "@/components/ui/tab-indicator";
 import { Card } from "@/components/ui/card";
 import { Chip } from "@/components/ui/chip";
 import { LiveOrb } from "@/components/ui/live-orb";
@@ -48,9 +47,10 @@ import { CompareSlider } from "@/components/ui/compare-slider";
 import { SnapCarousel } from "@/components/ui/snap-carousel";
 import { SwipeReveal } from "@/components/ui/swipe-reveal";
 import { SectionHeader } from "@/components/ui/section-header";
+import { PrivacyPolicy, type SummaryRow } from "@/components/privacy-policy";
 import { useMediaQuery } from "@/lib/reduced-motion";
 
-type Tab = "studio" | "history" | "info";
+type Tab = "studio" | "history" | "install" | "privacy" | "info";
 type Kind = "photo" | "video";
 type Engine = "local" | "free" | "cloud";
 
@@ -65,6 +65,8 @@ type Loaded = {
 const TAB_ITEMS = [
   { value: "studio", label: "Estudio", icon: <Aperture className="size-4" /> },
   { value: "history", label: "Historial", icon: <HistoryIcon className="size-4" /> },
+  { value: "install", label: "Instalar", icon: <QrCode className="size-4" /> },
+  { value: "privacy", label: "Privacidad", icon: <ShieldCheck className="size-4" /> },
   { value: "info", label: "Más", icon: <Sparkles className="size-4" /> },
 ] as const;
 
@@ -103,15 +105,6 @@ export function FilteroffApp() {
   const drawing = useRef(false);
   const toast = useToast();
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-
-  // refs para el indicador de tabs.
-  const tabScrollerRef = useRef<HTMLDivElement>(null);
-  const tabButtonsRef = useRef<Array<HTMLButtonElement | null>>([]);
-  useTabIndicator(
-    tabScrollerRef as unknown as React.RefObject<HTMLElement>,
-    tabButtonsRef as unknown as React.MutableRefObject<Array<HTMLElement | null>>,
-    TAB_ITEMS.findIndex((t) => t.value === tab),
-  );
 
   useEffect(() => {
     setHistory(readHistory());
@@ -420,23 +413,6 @@ export function FilteroffApp() {
         <LiveOrb className="shrink-0" />
       </header>
 
-      <div className="rise rise-2 mb-5">
-        <div
-          ref={tabScrollerRef as unknown as React.RefObject<HTMLDivElement>}
-          className="relative rounded-full border border-border bg-surface p-1"
-        >
-          <TabBar
-            items={TAB_ITEMS.map((t) => ({ value: t.value, label: t.label, icon: t.icon }))}
-            value={tab}
-            onChange={(v) => setTab(v as Tab)}
-            ariaLabel="Secciones de la app"
-            swipeable
-            size="md"
-            className="tab-indicator"
-          />
-        </div>
-      </div>
-
       {tab === "studio" ? (
         <StudioTab
           url={url}
@@ -499,12 +475,14 @@ export function FilteroffApp() {
         />
       ) : null}
 
-      {tab === "info" ? (
-        <InfoTab qr={qr} installable={installable} summary={summary} />
-      ) : null}
+      {tab === "install" ? <InstallTab qr={qr} installable={installable} /> : null}
+
+      {tab === "privacy" ? <PrivacyTab summary={summary} /> : null}
+
+      {tab === "info" ? <InfoTab summary={summary} /> : null}
 
       <nav className="dock fixed inset-x-0 bottom-0 z-10 border-t border-border bg-bg/85 backdrop-blur-xl">
-        <div className="mx-auto grid max-w-lg grid-cols-3 px-3 pt-2">
+        <div className="mx-auto grid max-w-lg grid-cols-5 px-3 pt-2">
           {TAB_ITEMS.map((item) => (
             <DockButton
               key={item.value}
@@ -537,7 +515,7 @@ function DockButton({
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       className={[
-        "press relative flex h-14 flex-col items-center justify-center gap-1 rounded-2xl text-xs",
+        "press relative flex h-14 flex-col items-center justify-center gap-1 rounded-2xl text-[10px]",
         "transition-colors duration-200",
         "focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
         "touch-manipulation",
@@ -977,15 +955,121 @@ function HistoryTab({ history, onClear, onRemove }: { history: HistoryItem[]; on
   );
 }
 
-function InfoTab({
+function InstallTab({
   qr,
   installable,
-  summary,
 }: {
   qr: { origin: string; svg: string } | null;
   installable: boolean;
-  summary: { kind: string; engine: string; n: number }[];
 }) {
+  return (
+    <section className="space-y-4">
+      <SectionHeader
+        eyebrow="App instalable"
+        title="Llevar en el bolsillo"
+        subtitle="Instalá Filteroff en cualquier tipo de dispositivo: iPhone, Android o escritorio. Sin tienda y sin cuenta."
+      />
+
+      <Card padding="md" className="rise rise-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <QrCode className="size-5 text-primary" />
+          <h2 className="font-display text-xl">Escaneá el QR</h2>
+        </div>
+        {installable && qr?.svg ? (
+          <div className="flex items-center gap-4">
+            <div className="w-32 shrink-0 rounded-xl bg-fg p-2">
+              <img
+                src={`data:image/svg+xml;base64,${toBase64(qr.svg)}`}
+                alt={`Código QR para ${qr.origin}`}
+                className="h-auto w-full"
+                width={128}
+                height={128}
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
+            <div className="min-w-0">
+              <p className="break-all text-sm text-fg">{qr.origin}</p>
+              <p className="mt-1 text-xs text-muted">
+                Escaneá con la cámara del teléfono y abrilo desde ahí para instalar la app.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted">
+            El código QR aparece cuando la app está publicada en una dirección https. Mientras tanto,
+            abrí la app en el navegador y usá «Agregar a inicio» con los pasos de abajo.
+          </p>
+        )}
+      </Card>
+
+      <Card padding="md" className="rise rise-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Smartphone className="size-5 text-primary" />
+          <h2 className="font-display text-xl">En cualquier dispositivo</h2>
+        </div>
+        <ol className="list-decimal space-y-2 pl-5 text-sm text-muted">
+          <li>
+            <span className="text-fg">iPhone (Safari):</span> tocá el botón Compartir y elegí{" "}
+            <em>Agregar a pantalla de inicio</em>. La app se abre después sin barra de Safari.
+          </li>
+          <li>
+            <span className="text-fg">Android (Chrome):</span> abrí el menú <em>⋮</em> y tocá{" "}
+            <em>Instalar app</em> o <em>Agregar a inicio</em>.
+          </li>
+          <li>
+            <span className="text-fg">Escritorio:</span> Chrome y Edge muestran un botón de
+            instalación en la barra de direcciones.
+          </li>
+        </ol>
+        <p className="text-xs text-muted">
+          Sin tienda, sin cuenta, sin tracking. La app vive en el teléfono y la actualización llega al
+          recargar.
+        </p>
+      </Card>
+    </section>
+  );
+}
+
+function PrivacyTab({ summary }: { summary: SummaryRow[] }) {
+  return (
+    <section className="space-y-4">
+      <SectionHeader
+        eyebrow="Cuarto oscuro abierto"
+        title="Política de privacidad"
+        subtitle="Sin cuenta, sin tracking y sin muros. Escrita en lenguaje claro."
+      />
+
+      <Card padding="md" className="rise rise-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <Eye className="size-5 text-primary" />
+          <h2 className="font-display text-xl">Tu responsabilidad</h2>
+        </div>
+        <p className="text-sm text-muted">
+          <strong className="text-fg">
+            El uso de Filteroff es responsabilidad de la persona que usa la app.
+          </strong>{" "}
+          Procesá solo archivos sobre los que tengas derecho a editar y respetá la privacidad e imagen
+          de otras personas.
+        </p>
+      </Card>
+
+      <div className="rise rise-4">
+        <PrivacyPolicy summary={summary} withResponsibility={false} />
+      </div>
+
+      <p className="rise rise-5 text-center text-xs text-muted">
+        ¿Querés compartirla? Está también en la página{" "}
+        <Link to="/privacidad" className="text-primary underline-offset-2 hover:underline">
+          /privacidad
+        </Link>
+        .
+      </p>
+    </section>
+  );
+}
+
+function InfoTab({ summary }: { summary: SummaryRow[] }) {
   const ENGINE_LABEL: Record<string, string> = {
     cloud: "nube de pago",
     free: "refuerzo gratis",
@@ -995,7 +1079,7 @@ function InfoTab({
     <section className="space-y-4">
       <SectionHeader
         eyebrow="Cuarto oscuro abierto"
-        title="Instalar, reforzar y entender qué pasa"
+        title="Reforzar y entender qué pasa"
         subtitle="Sin cuenta. Sin muros. La foto o el video se procesan en tu teléfono."
       />
 
@@ -1006,7 +1090,8 @@ function InfoTab({
             <h2 className="font-display text-xl text-fg">Motor local</h2>
           </div>
           <p className="mt-2 text-sm text-muted">
-            Detecta capas gráficas, rellena stickers y aplana el color en tu propio teléfono. La foto no sale.
+            Detecta capas gráficas, rellena stickers y aplana el color en tu propio teléfono. La foto
+            no sale.
           </p>
         </Card>
         <Card padding="md" className="h-full">
@@ -1015,7 +1100,8 @@ function InfoTab({
             <h2 className="font-display text-xl text-fg">Cadena IA</h2>
           </div>
           <p className="mt-2 text-sm text-muted">
-            Primero gratis y sin registro (apps Gradio públicas). Si falla, salta a la nube con cupo. Si se acaba, vuelve a local.
+            Primero gratis y sin registro (apps Gradio públicas). Si falla, salta a la nube con cupo.
+            Si se acaba, vuelve a local.
           </p>
         </Card>
         <Card padding="md" className="h-full">
@@ -1024,71 +1110,11 @@ function InfoTab({
             <h2 className="font-display text-xl text-fg">Privacidad primero</h2>
           </div>
           <p className="mt-2 text-sm text-muted">
-            El historial vive en tu teléfono. La base solo recibe conteos anónimos. Vos sos responsable de lo que proceses.
+            El historial vive en tu teléfono. La base solo recibe conteos anónimos. Leé los detalles
+            en la pestaña Privacidad.
           </p>
         </Card>
       </SnapCarousel>
-
-      <Card padding="md" className="rise rise-3 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Smartphone className="size-5 text-primary" />
-            <h2 className="font-display text-xl">Llevar en el bolsillo</h2>
-          </div>
-          <Link
-            to="/qr"
-            className="press inline-flex h-9 items-center gap-1 rounded-full border border-border bg-bg/60 px-3 text-xs text-fg transition-colors hover:text-primary"
-          >
-            Ver QR
-            <ChevronRight className="size-3.5" />
-          </Link>
-        </div>
-        <p className="text-sm text-muted">
-          Es una app instalable, no una página suelta. En iPhone: Compartir y luego Agregar a inicio. En Android:
-          el menú del navegador y luego Instalar app.
-        </p>
-        {installable && qr?.svg ? (
-          <div className="flex items-center gap-3">
-            <div className="w-24 rounded-xl bg-fg p-1.5">
-              <img
-                src={`data:image/svg+xml;base64,${toBase64(qr.svg)}`}
-                alt={`Código QR para ${qr.origin}`}
-                className="h-auto w-full"
-                width={96}
-                height={96}
-                loading="lazy"
-                decoding="async"
-              />
-            </div>
-            <div className="min-w-0">
-              <p className="truncate text-sm text-fg">{qr.origin}</p>
-              <p className="text-xs text-muted">Escaneá con la cámara del teléfono.</p>
-            </div>
-          </div>
-        ) : (
-          <p className="text-sm text-muted">
-            El código QR aparece cuando la app está publicada en una dirección https. Mientras tanto, abran la app en el navegador y usen "Agregar a inicio".
-          </p>
-        )}
-      </Card>
-
-      <Card padding="md" className="rise rise-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <Eye className="size-5 text-primary" />
-          <h2 className="font-display text-xl">Tu responsabilidad</h2>
-        </div>
-        <p className="text-sm text-muted">
-          <strong className="text-fg">El uso de Filteroff es responsabilidad de la persona que usa la app.</strong> Procesá solo
-          archivos sobre los que tengas derecho a editar y respetá la privacidad e imagen de otras personas.
-        </p>
-        <Link
-          to="/privacidad"
-          className="press inline-flex h-9 items-center gap-1 rounded-full border border-border bg-bg/60 px-3 text-xs text-fg transition-colors hover:text-primary"
-        >
-          Leer la política completa
-          <ChevronRight className="size-3.5" />
-        </Link>
-      </Card>
 
       {summary.length > 0 ? (
         <Card padding="md" className="rise rise-5">
