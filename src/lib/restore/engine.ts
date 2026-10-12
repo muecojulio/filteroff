@@ -1,11 +1,20 @@
+/**
+ * Motor local de restauración. Corre completo en el teléfono (sin cuenta, sin
+ * servidor, sin límites más allá de la RAM del aparato). El relleno de
+ * stickers es una variante del algoritmo de inundación de OpenCV
+ * `cv2.inpaint` (BSD) y el detector de capas gráficas compara cada píxel con
+ * un desenfoque ancho de la propia foto.
+ */
+
 export type Raster = {
   width: number;
   height: number;
   data: Uint8ClampedArray;
 };
 
-export type RestoreOptions = {
-  stickers: boolean;
+import { polishNatural } from "@/lib/restore/enhance";
+
+export type RestoreOptions = {  stickers: boolean;
   natural: boolean;
   /** 0..1, how far to pull color and texture back toward a plain photograph. */
   strength: number;
@@ -211,6 +220,8 @@ export function detectStickerMask(src: Raster, sensitivity: number): Uint8Array 
   const distCut = 78 - sens * 36;
   const dist2Cut = distCut * distCut;
   const satCut = 100 - sens * 46;
+  const hardCut = 252 - sens * 12;
+  const darkCut = 24 - sens * 12;
   const raw = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) {
     const o = i * 4;
@@ -227,22 +238,25 @@ export function detectStickerMask(src: Raster, sensitivity: number): Uint8Array 
     const max = Math.max(r, g, b);
     const min = Math.min(r, g, b);
     const sat = max - min;
-    const graphic = sat >= satCut || max >= 242 || min <= 14;
+    const graphic = sat >= satCut || max >= hardCut || min <= darkCut;
     if (dist2 >= dist2Cut && graphic) raw[i] = 1;
   }
   const total = w * h;
   const kept = new Uint8Array(total);
   const comps = componentsOf(raw, w, h);
+  // Presupuestos escalados con la sensibilidad: a más sensibilidad, capas
+  // gráficas más grandes (memes, marcos completos) entran en el relevo.
+  const perComp = 0.12 + sens * 0.18;
+  const budget = Math.floor(total * (0.18 + sens * 0.24));
   const ranked = comps
-    .filter((c) => c.area >= 10 && c.area / total <= 0.12)
+    .filter((c) => c.area >= 10 && c.area / total <= perComp)
     .sort((a, b) => a.area - b.area);
   let used = 0;
-  const budget = Math.floor(total * 0.18);
   for (const comp of ranked) {
     if (used + comp.area > budget) continue;
     const bw = comp.maxX - comp.minX + 1;
     const bh = comp.maxY - comp.minY + 1;
-    if (bw > w * 0.72 && bh > h * 0.72) continue;
+    if (bw > w * 0.82 && bh > h * 0.82) continue;
     for (const p of comp.pixels) kept[p] = 1;
     used += comp.area;
   }
@@ -554,7 +568,14 @@ export async function restoreRaster(
   }
   onProgress?.(0.72);
   await yieldThread();
-  if (options.natural) current = naturalize(current, options.strength);
+  if (options.natural) {
+    current = naturalize(current, options.strength);
+    onProgress?.(0.86);
+    await yieldThread();
+    // Foto nacida con el filtro horneado: balance de grises, anti-veladura,
+    // CLAHE y enfoque (técnicas portadas de repositorios públicos).
+    current = polishNatural(current, options.strength);
+  }
   onProgress?.(1);
   return { raster: current, covered };
 }

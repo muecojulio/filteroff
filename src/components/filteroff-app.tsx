@@ -4,6 +4,7 @@ import {
   Aperture,
   Brush,
   Download,
+  Github,
   History,
   ImagePlus,
   Link2,
@@ -18,10 +19,12 @@ import { restoreRaster, type Raster } from "@/lib/restore/engine";
 import { blobToRaster, makeSampleBlob, paintMask, rasterToBlob, restoreVideo, shrinkJpeg } from "@/lib/restore/raster";
 import { recordRestore, restoreSummary } from "@/server/stats.functions";
 import { refinePhoto } from "@/server/refine.functions";
+import { freeRefine } from "@/server/free-refine.functions";
 import { installCode } from "@/server/qr.functions";
 
 type Tab = "studio" | "history" | "info";
 type Kind = "photo" | "video";
+type Engine = "local" | "free" | "cloud";
 
 type Loaded = {
   kind: Kind;
@@ -49,7 +52,7 @@ export function FilteroffApp() {
   const [split, setSplit] = useState(56);
   const [stickers, setStickers] = useState(true);
   const [natural, setNatural] = useState(true);
-  const [cloud, setCloud] = useState(false);
+  const [boost, setBoost] = useState(true);
   const [brushOn, setBrushOn] = useState(false);
   const [strength, setStrength] = useState(0.62);
   const [sensitivity, setSensitivity] = useState(0.55);
@@ -108,7 +111,7 @@ export function FilteroffApp() {
     setTab("studio");
   }
 
-  async function useBlob(blob: Blob, label: string, kind: Kind) {
+  async function adoptBlob(blob: Blob, label: string, kind: Kind) {
     if (kind === "video") {
       const sourceUrl = URL.createObjectURL(blob);
       adopt({ kind, label, sourceUrl, raster: null, posterUrl: null });
@@ -135,7 +138,7 @@ export function FilteroffApp() {
     }
     try {
       setBusy("Leyendo archivo…");
-      await useBlob(file, file.name || (kind === "video" ? "Video" : "Foto"), kind);
+      await adoptBlob(file, file.name || (kind === "video" ? "Video" : "Foto"), kind);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo abrir el archivo.");
     } finally {
@@ -160,7 +163,7 @@ export function FilteroffApp() {
       } catch {
         label = "Enlace";
       }
-      await useBlob(blob, label, kind);
+      await adoptBlob(blob, label, kind);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo traer el enlace.");
     } finally {
@@ -173,7 +176,7 @@ export function FilteroffApp() {
     setBusy("Preparando ejemplo…");
     try {
       const blob = await makeSampleBlob();
-      await useBlob(blob, "Ejemplo", "photo");
+      await adoptBlob(blob, "Ejemplo", "photo");
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo crear el ejemplo.");
     } finally {
@@ -237,26 +240,40 @@ export function FilteroffApp() {
         await recordRestore({
           data: { kind: "video", engine: "local", coveredBp: 0, durationMs: Math.round(performance.now() - started) },
         }).catch(() => undefined);
-        setNote("Video listo con el motor local. Se procesaron los primeros 8 segundos.");
+        setNote("Video listo con el motor local. Se procesaron los primeros 15 segundos.");
         return;
       }
       if (!loaded.raster) return;
       setBusy("Restaurando…");
       const local = await restoreRaster(loaded.raster, options, setProgress);
       let finalRaster = local.raster;
-      let engine: "local" | "cloud" = "local";
-      if (cloud) {
-        setBusy("Refuerzo en la nube…");
+      let engine: Engine = "local";
+      if (boost) {
+        // Cadena automática: primero gratis sin registro (Spaces públicos);
+        // si nadie responde, la nube con cupo; y si se acabó el cupo, la
+        // cadena ya pasó por el gratis. El resultado local siempre existe.
+        setBusy("Refuerzo gratis (sin registro)…");
         try {
           const imageBase64 = await shrinkJpeg(local.raster, 896, 0.72);
-          const refined = await refinePhoto({ data: { imageBase64 } });
-          if (refined.ok) {
-            const remote = await blobToRaster(await fetch(`data:image/jpeg;base64,${refined.imageBase64}`).then((r) => r.blob()));
+          const free = await freeRefine({ data: { imageBase64 } }).catch(() => ({ ok: false as const, reason: "unavailable" as const }));
+          if (free.ok) {
+            setBusy("Recibiendo el resultado gratis…");
+            const remote = await blobToRaster(await fetch(`data:image/png;base64,${free.imageBase64}`).then((r) => r.blob()));
             finalRaster = remote;
-            engine = "cloud";
-            setNote("Refuerzo aplicado. Si el cupo se acaba, el siguiente queda en el motor local.");
+            engine = "free";
+            setNote(`Refuerzo gratis aplicado (${free.provider}, sin registro ni llave).`);
           } else {
-            setNote(fallbackNote(refined.reason));
+            setBusy("Refuerzo de pago…");
+            const refined = await refinePhoto({ data: { imageBase64 } }).catch(() => ({ ok: false as const, reason: "rejected" as const }));
+            if (refined.ok) {
+              setBusy("Recibiendo el resultado…");
+              const remote = await blobToRaster(await fetch(`data:image/jpeg;base64,${refined.imageBase64}`).then((r) => r.blob()));
+              finalRaster = remote;
+              engine = "cloud";
+              setNote("Refuerzo de pago aplicado. Cuando el cupo se acabe, la cadena salta sola al refuerzo gratis.");
+            } else {
+              setNote(chainNote(free.reason, refined.reason));
+            }
           }
         } catch {
           setNote("El refuerzo no respondió. Se dejó el resultado del motor local, sin gastar más cupo.");
@@ -290,7 +307,7 @@ export function FilteroffApp() {
     }
   }
 
-  function remember(source: Loaded, engine: "local" | "cloud", thumb: string) {
+  function remember(source: Loaded, engine: Engine, thumb: string) {
     const item: HistoryItem = {
       id: `${Date.now()}`,
       at: Date.now(),
@@ -327,8 +344,9 @@ export function FilteroffApp() {
       {tab === "studio" ? (
         <section className="space-y-4">
           <p className="rise rise-2 text-sm text-muted">
-            Pega un enlace o abre una foto. Se quitan stickers, marcos y el exceso del filtro. Lo que ya era la
-            foto se queda, más natural.
+            Pega el enlace de una foto o un video (directo, o de la página que lo publica), o abre un archivo. Se
+            quitan stickers, marcos y el exceso del filtro, sin registro y sin muros. Lo que ya era la foto se
+            queda, más natural.
           </p>
           <form
             className="rise rise-3 flex gap-2"
@@ -394,10 +412,10 @@ export function FilteroffApp() {
             <Toggle label="Quitar stickers y marcos" checked={stickers} onChange={setStickers} />
             <Toggle label="Aspecto natural" checked={natural} onChange={setNatural} />
             <Toggle
-              label="Refuerzo en la nube"
-              hint="Opcional. Gasta cupo. Si se acaba, se queda el motor local."
-              checked={cloud}
-              onChange={setCloud}
+              label="Refuerzo IA automático"
+              hint="Primero gratis y sin registro. Si falla o el cupo se acaba, sigue la cadena sola y el motor local siempre responde."
+              checked={boost}
+              onChange={setBoost}
             />
             <label className="block text-sm">
               <span className="mb-2 flex justify-between text-muted">
@@ -559,7 +577,8 @@ export function FilteroffApp() {
           </div>
           <p className="text-xs leading-relaxed text-muted">
             Un filtro ya mezclado no se puede deshacer al pixel original. Esto recupera textura, aplana el color
-            excesivo y rellena stickers con lo que hay alrededor. No cambia ropa ni inventa otra persona.
+            excesivo y rellena stickers con lo que hay alrededor. No cambia ropa ni inventa otra persona, y no
+            convierte una foto en video.
           </p>
         </section>
       ) : null}
@@ -592,7 +611,8 @@ export function FilteroffApp() {
                   <div className="min-w-0">
                     <p className="truncate text-sm">{item.label}</p>
                     <p className="text-xs text-muted">
-                      {item.kind === "video" ? "Video" : "Foto"} · {item.engine === "cloud" ? "nube" : "local"} ·{" "}
+                      {item.kind === "video" ? "Video" : "Foto"} ·{" "}
+                      {item.engine === "cloud" ? "nube de pago" : item.engine === "free" ? "refuerzo gratis" : "local"} ·{" "}
                       {new Date(item.at).toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" })}
                     </p>
                   </div>
@@ -638,26 +658,50 @@ export function FilteroffApp() {
               el archivo ni la dirección. Se rechazan enlaces a redes internas.
             </p>
             <p>
-              El refuerzo en la nube es un interruptor apagado por defecto. Si lo enciendes, se envía una copia
-              reducida a xAI para un retoque. Si el cupo se acaba, vuelve solo el motor local.
+              El refuerzo IA es automático y empieza por lo gratis: apps públicas que no piden key ni registro. Solo
+              si nadie responde se usa la nube con cupo, y cuando el cupo se acaba la cadena vuelve sola al refuerzo
+              gratis y al motor local.
             </p>
             <p>
               El historial (una miniatura y el nombre) vive en este aparato. Puedes borrarlo. En la base solo entran
-              conteos anónimos: foto o video, motor usado y duración. Sin imagen y sin enlace. Esos conteos tienen
-              índices por fecha y por tipo.
+              conteos anónimos: foto o video, motor usado y duración. Sin imagen y sin enlace.
             </p>
             <p>No vendemos datos. No hay perfil. Filteroff no cambia la ropa ni inventa desnudos: eso no es quitar un filtro.</p>
             {summary.length > 0 ? (
               <ul className="text-xs text-muted">
                 {summary.map((row) => (
                   <li key={`${row.kind}-${row.engine}`}>
-                    30 días · {row.kind === "video" ? "videos" : "fotos"} · {row.engine === "cloud" ? "nube" : "local"} · {row.n}
+                    30 días · {row.kind === "video" ? "videos" : "fotos"} ·{" "}
+                    {row.engine === "cloud" ? "nube de pago" : row.engine === "free" ? "refuerzo gratis" : "local"} ·{" "}
+                    {row.n}
                   </li>
                 ))}
               </ul>
             ) : (
               <p className="text-xs text-muted">Aún no hay conteos de los últimos 30 días.</p>
             )}
+          </article>
+
+          <article className="space-y-3 rounded-2xl border border-border bg-surface p-4 text-sm leading-relaxed">
+            <div className="flex items-center gap-2">
+              <Github className="size-5 text-primary" />
+              <h2 className="font-display text-2xl">Motor abierto</h2>
+            </div>
+            <p>
+              El motor del teléfono y la cadena de refuerzo gratis se apoyan en trabajo público de GitHub, copiado y
+              adaptado a esta app:
+            </p>
+            <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
+              <li>gradio-app/gradio (MIT): protocolo para llamar apps públicas sin key ni registro.</li>
+              <li>GFPGAN y SwinIR (Apache-2.0): demos públicas de rostro y reconstrucción.</li>
+              <li>OpenCV y scikit-image (BSD): relleno de stickers, CLAHE y balance de grises.</li>
+              <li>Dark Channel Prior (Kaiming He): quita la veladura que dejan los filtros con glow.</li>
+            </ul>
+            <p className="text-xs text-muted">
+              Cadena automática: motor local (el teléfono) → refuerzo gratis (Spaces públicos) → nube con cupo (si
+              existe). Si un eslabón se queda sin cupo o está dormido, el siguiente entra solo, y el resultado
+              siempre llega.
+            </p>
           </article>
         </section>
       ) : null}
@@ -725,11 +769,14 @@ function Toggle({
   );
 }
 
-function fallbackNote(reason: "off" | "quota" | "cooldown" | "rejected") {
-  if (reason === "quota") return "Cupo de IA agotado. Se activó solo el motor local, sin registro.";
-  if (reason === "cooldown") return "El refuerzo pide un momento. Se dejó el resultado local.";
-  if (reason === "off") return "El refuerzo no está disponible aquí. Sigue el motor local.";
-  return "El refuerzo rechazó esta imagen. Se dejó el resultado local, sin cambiar la ropa ni el rostro.";
+function chainNote(freeReason: "off" | "cooldown" | "unavailable", paidReason: "off" | "quota" | "cooldown" | "rejected") {
+  if (freeReason === "unavailable" && paidReason === "rejected") {
+    return "Los refuerzos no respondieron ahora mismo. Se dejó el resultado del motor local, igual de limpio.";
+  }
+  if (paidReason === "quota") return "Cupo de IA agotado y el gratis ocupado. El motor local dejó la foto lista, sin registro.";
+  if (paidReason === "cooldown" || freeReason === "cooldown") return "Los refuerzos piden un momento. Se dejó el resultado local.";
+  if (paidReason === "off") return "El refuerzo gratis no respondió y no hay nube de pago aquí. El motor local dejó la foto lista.";
+  return "Los refuerzos rechazaron esta imagen. Se dejó el resultado local, sin cambiar la ropa ni el rostro.";
 }
 
 async function blobToThumb(blob: Blob): Promise<string> {
