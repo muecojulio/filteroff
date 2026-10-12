@@ -10,11 +10,24 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as PrivacidadRouteImport } from './routes/privacidad'
+import { Route as QrRouteImport } from './routes/qr'
 import { Route as ApiMediaRouteImport } from './routes/api/media'
+import { Route as ApiQrRouteImport } from './routes/api/qr'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacidadRoute = PrivacidadRouteImport.update({
+  id: '/privacidad',
+  path: '/privacidad',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QrRoute = QrRouteImport.update({
+  id: '/qr',
+  path: '/qr',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiMediaRoute = ApiMediaRouteImport.update({
@@ -22,31 +35,48 @@ const ApiMediaRoute = ApiMediaRouteImport.update({
   path: '/api/media',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiQrRoute = ApiQrRouteImport.update({
+  id: '/api/qr',
+  path: '/api/qr',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/privacidad': typeof PrivacidadRoute
+  '/qr': typeof QrRoute
   '/api/media': typeof ApiMediaRoute
+  '/api/qr': typeof ApiQrRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/privacidad': typeof PrivacidadRoute
+  '/qr': typeof QrRoute
   '/api/media': typeof ApiMediaRoute
+  '/api/qr': typeof ApiQrRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/privacidad': typeof PrivacidadRoute
+  '/qr': typeof QrRoute
   '/api/media': typeof ApiMediaRoute
+  '/api/qr': typeof ApiQrRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/media'
+  fullPaths: '/' | '/privacidad' | '/qr' | '/api/media' | '/api/qr'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/media'
-  id: '__root__' | '/' | '/api/media'
+  to: '/' | '/privacidad' | '/qr' | '/api/media' | '/api/qr'
+  id: '__root__' | '/' | '/privacidad' | '/qr' | '/api/media' | '/api/qr'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  PrivacidadRoute: typeof PrivacidadRoute
+  QrRoute: typeof QrRoute
   ApiMediaRoute: typeof ApiMediaRoute
+  ApiQrRoute: typeof ApiQrRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -58,6 +88,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/privacidad': {
+      id: '/privacidad'
+      path: '/privacidad'
+      fullPath: '/privacidad'
+      preLoaderRoute: typeof PrivacidadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/qr': {
+      id: '/qr'
+      path: '/qr'
+      fullPath: '/qr'
+      preLoaderRoute: typeof QrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/media': {
       id: '/api/media'
       path: '/api/media'
@@ -65,12 +109,22 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiMediaRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/qr': {
+      id: '/api/qr'
+      path: '/api/qr'
+      fullPath: '/api/qr'
+      preLoaderRoute: typeof ApiQrRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  PrivacidadRoute: PrivacidadRoute,
+  QrRoute: QrRoute,
   ApiMediaRoute: ApiMediaRoute,
+  ApiQrRoute: ApiQrRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
