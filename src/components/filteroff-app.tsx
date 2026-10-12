@@ -1,26 +1,54 @@
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import * as Switch from "@radix-ui/react-switch";
+import { Link } from "@tanstack/react-router";
 import {
   Aperture,
   Brush,
   Download,
-  Github,
-  History,
+  History as HistoryIcon,
   ImagePlus,
   Link2,
   Loader2,
-  Shield,
   Smartphone,
   Trash2,
   WandSparkles,
+  Sparkles,
+  ChevronRight,
+  Cpu,
+  Lock,
+  Eye,
+  Zap,
+  TriangleAlert,
+  Info,
+  Shuffle,
 } from "lucide-react";
 import { clearHistory, readHistory, writeHistory, type HistoryItem } from "@/lib/history";
 import { restoreRaster, type Raster } from "@/lib/restore/engine";
-import { blobToRaster, makeSampleBlob, paintMask, rasterToBlob, restoreVideo, shrinkJpeg } from "@/lib/restore/raster";
+import {
+  blobToRaster,
+  makeSampleBlob,
+  paintMask,
+  rasterToBlob,
+  restoreVideo,
+  shrinkJpeg,
+} from "@/lib/restore/raster";
 import { recordRestore, restoreSummary } from "@/server/stats.functions";
 import { refinePhoto } from "@/server/refine.functions";
 import { freeRefine } from "@/server/free-refine.functions";
 import { installCode } from "@/server/qr.functions";
+import { useToast } from "@/components/ui/use-toast";
+import { PressButton, type PressStatus } from "@/components/ui/press-button";
+import { Toggle } from "@/components/ui/toggle";
+import { Slider } from "@/components/ui/slider";
+import { TabBar } from "@/components/ui/tab-bar";
+import { useTabIndicator } from "@/components/ui/tab-indicator";
+import { Card } from "@/components/ui/card";
+import { Chip } from "@/components/ui/chip";
+import { LiveOrb } from "@/components/ui/live-orb";
+import { CompareSlider } from "@/components/ui/compare-slider";
+import { SnapCarousel } from "@/components/ui/snap-carousel";
+import { SwipeReveal } from "@/components/ui/swipe-reveal";
+import { SectionHeader } from "@/components/ui/section-header";
+import { useMediaQuery } from "@/lib/reduced-motion";
 
 type Tab = "studio" | "history" | "info";
 type Kind = "photo" | "video";
@@ -33,6 +61,12 @@ type Loaded = {
   raster: Raster | null;
   posterUrl: string | null;
 };
+
+const TAB_ITEMS = [
+  { value: "studio", label: "Estudio", icon: <Aperture className="size-4" /> },
+  { value: "history", label: "Historial", icon: <HistoryIcon className="size-4" /> },
+  { value: "info", label: "Más", icon: <Sparkles className="size-4" /> },
+] as const;
 
 function revoke(url: string | null | undefined) {
   if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
@@ -60,20 +94,29 @@ export function FilteroffApp() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [summary, setSummary] = useState<{ kind: string; engine: string; n: number }[]>([]);
   const [qr, setQr] = useState<{ origin: string; svg: string } | null>(null);
+  const [restoreStatus, setRestoreStatus] = useState<PressStatus>("idle");
+  const [urlStatus, setUrlStatus] = useState<PressStatus>("idle");
   const fileRef = useRef<HTMLInputElement>(null);
   const brushRef = useRef<HTMLCanvasElement>(null);
   const baseRef = useRef<HTMLCanvasElement>(null);
   const maskRef = useRef<Uint8Array | null>(null);
   const drawing = useRef(false);
+  const toast = useToast();
+  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+
+  // refs para el indicador de tabs.
+  const tabScrollerRef = useRef<HTMLDivElement>(null);
+  const tabButtonsRef = useRef<Array<HTMLButtonElement | null>>([]);
+  useTabIndicator(
+    tabScrollerRef as unknown as React.RefObject<HTMLElement>,
+    tabButtonsRef as unknown as React.MutableRefObject<Array<HTMLElement | null>>,
+    TAB_ITEMS.findIndex((t) => t.value === tab),
+  );
 
   useEffect(() => {
     setHistory(readHistory());
-    restoreSummary()
-      .then(setSummary)
-      .catch(() => setSummary([]));
-    installCode()
-      .then(setQr)
-      .catch(() => setQr(null));
+    restoreSummary().then(setSummary).catch(() => setSummary([]));
+    installCode().then(setQr).catch(() => setQr(null));
   }, []);
 
   useEffect(() => {
@@ -139,8 +182,10 @@ export function FilteroffApp() {
     try {
       setBusy("Leyendo archivo…");
       await adoptBlob(file, file.name || (kind === "video" ? "Video" : "Foto"), kind);
+      toast.push({ tone: "success", title: "Imagen cargada", body: file.name || "Lista para restaurar." });
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo abrir el archivo.");
+      toast.push({ tone: "error", title: "No se pudo abrir", body: err instanceof Error ? err.message : "" });
     } finally {
       setBusy(null);
     }
@@ -150,6 +195,7 @@ export function FilteroffApp() {
     const target = url.trim();
     if (!target) return;
     setError("");
+    setUrlStatus("loading");
     setBusy("Trayendo el enlace…");
     try {
       const response = await fetch(`/api/media?url=${encodeURIComponent(target)}`);
@@ -164,10 +210,15 @@ export function FilteroffApp() {
         label = "Enlace";
       }
       await adoptBlob(blob, label, kind);
+      setUrlStatus("success");
+      toast.push({ tone: "success", title: "Enlace traído", body: label });
     } catch (err) {
+      setUrlStatus("error");
       setError(err instanceof Error ? err.message : "No se pudo traer el enlace.");
+      toast.push({ tone: "error", title: "No se pudo traer el enlace", body: err instanceof Error ? err.message : "" });
     } finally {
       setBusy(null);
+      window.setTimeout(() => setUrlStatus("idle"), 1400);
     }
   }
 
@@ -177,6 +228,7 @@ export function FilteroffApp() {
     try {
       const blob = await makeSampleBlob();
       await adoptBlob(blob, "Ejemplo", "photo");
+      toast.push({ tone: "info", title: "Ejemplo cargado", body: "Tocá restaurar para ver el motor local en acción." });
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo crear el ejemplo.");
     } finally {
@@ -204,7 +256,7 @@ export function FilteroffApp() {
     paintMask(mask, raster.width, raster.height, x, y, radius);
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.fillStyle = "rgba(224, 122, 61, 0.45)";
+    ctx.fillStyle = "rgba(255, 138, 77, 0.45)";
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fill();
@@ -214,6 +266,7 @@ export function FilteroffApp() {
     if (!loaded || busy) return;
     setError("");
     setNote("");
+    setRestoreStatus("loading");
     setProgress(0.04);
     const started = performance.now();
     const options = {
@@ -238,9 +291,16 @@ export function FilteroffApp() {
         const thumb = await blobToThumb(cleaned.poster);
         remember(loaded, "local", thumb);
         await recordRestore({
-          data: { kind: "video", engine: "local", coveredBp: 0, durationMs: Math.round(performance.now() - started) },
+          data: {
+            kind: "video",
+            engine: "local",
+            coveredBp: 0,
+            durationMs: Math.round(performance.now() - started),
+          },
         }).catch(() => undefined);
         setNote("Video listo con el motor local. Se procesaron los primeros 15 segundos.");
+        setRestoreStatus("success");
+        toast.push({ tone: "success", title: "Video restaurado", body: "Motor local, sin enviar el archivo." });
         return;
       }
       if (!loaded.raster) return;
@@ -249,9 +309,6 @@ export function FilteroffApp() {
       let finalRaster = local.raster;
       let engine: Engine = "local";
       if (boost) {
-        // Cadena automática: primero gratis sin registro (Spaces públicos);
-        // si nadie responde, la nube con cupo; y si se acabó el cupo, la
-        // cadena ya pasó por el gratis. El resultado local siempre existe.
         setBusy("Refuerzo gratis (sin registro)…");
         try {
           const imageBase64 = await shrinkJpeg(local.raster, 896, 0.72);
@@ -299,11 +356,20 @@ export function FilteroffApp() {
           durationMs: Math.round(performance.now() - started),
         },
       }).catch(() => undefined);
+      setRestoreStatus("success");
+      toast.push({
+        tone: "success",
+        title: engine === "local" ? "Listo en el teléfono" : engine === "free" ? "Refuerzo gratis aplicado" : "Refuerzo de pago aplicado",
+        body: covered > 0 ? `Capa gráfica rellenada: ${Math.round(covered * 1000) / 10}%` : "Resultado listo para guardar.",
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo restaurar.");
+      setRestoreStatus("error");
+      toast.push({ tone: "error", title: "No se pudo restaurar", body: err instanceof Error ? err.message : "" });
     } finally {
       setBusy(null);
       setProgress(0);
+      window.setTimeout(() => setRestoreStatus("idle"), 1600);
     }
   }
 
@@ -327,390 +393,127 @@ export function FilteroffApp() {
     a.download = loaded.kind === "video" ? "filteroff.webm" : "filteroff.jpg";
     a.click();
     setTimeout(() => URL.revokeObjectURL(href), 1500);
+    toast.push({ tone: "success", title: "Guardado", body: loaded.label });
   }
 
   const installable = Boolean(qr?.origin.startsWith("https://") && !/localhost|127\.0\.0\.1/.test(qr.origin));
 
   return (
-    <div className="mx-auto min-h-dvh max-w-lg px-4 pt-6 pb-28">
-      <header className="rise mb-6 flex items-end justify-between gap-4">
-        <div>
-          <p className="text-xs tracking-widest text-muted uppercase">Cuarto oscuro</p>
-          <h1 className="font-display text-4xl leading-none font-medium text-fg">Filteroff</h1>
+    <div className="relative mx-auto min-h-dvh max-w-lg px-4 pt-6 pb-32">
+      {/* Orbes decorativos de fondo — respetan `prefers-reduced-motion`. */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div
+          className={["absolute -top-20 -right-24 h-72 w-72 rounded-full bg-primary/15 blur-3xl", reducedMotion ? "" : "pulse-soft"].join(" ")}
+        />
+        <div
+          className={["absolute top-1/3 -left-32 h-80 w-80 rounded-full bg-accent/10 blur-3xl", reducedMotion ? "" : "pulse-soft"].join(" ")}
+          style={{ animationDelay: "0.6s" }}
+        />
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(224,122,61,0.06),transparent_60%)]" />
+      </div>
+
+      <header className="rise mb-6 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="eyebrow-shimmer text-xs font-semibold uppercase tracking-[0.18em]">Cuarto oscuro</p>
+          <h1 className="mt-1 font-display text-4xl font-medium leading-none text-fg">Filteroff</h1>
         </div>
-        <Aperture className="mb-1 size-8 text-primary" aria-hidden="true" />
+        <LiveOrb className="shrink-0" />
       </header>
 
+      <div className="rise rise-2 mb-5">
+        <div
+          ref={tabScrollerRef as unknown as React.RefObject<HTMLDivElement>}
+          className="relative rounded-full border border-border bg-surface p-1"
+        >
+          <TabBar
+            items={TAB_ITEMS.map((t) => ({ value: t.value, label: t.label, icon: t.icon }))}
+            value={tab}
+            onChange={(v) => setTab(v as Tab)}
+            ariaLabel="Secciones de la app"
+            swipeable
+            size="md"
+            className="tab-indicator"
+          />
+        </div>
+      </div>
+
       {tab === "studio" ? (
-        <section className="space-y-4">
-          <p className="rise rise-2 text-sm text-muted">
-            Pega el enlace de una foto o un video (directo, o de la página que lo publica), o abre un archivo. Se
-            quitan stickers, marcos y el exceso del filtro, sin registro y sin muros. Lo que ya era la foto se
-            queda, más natural.
-          </p>
-          <form
-            className="rise rise-3 flex gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void onUrl();
-            }}
-          >
-            <label className="sr-only" htmlFor="media-url">
-              Enlace de la foto o el video
-            </label>
-            <input
-              id="media-url"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://…"
-              inputMode="url"
-              autoCapitalize="off"
-              autoCorrect="off"
-              className="h-12 min-w-0 flex-1 rounded-2xl border border-border bg-surface px-4 text-sm outline-none focus:border-primary"
-            />
-            <button
-              type="submit"
-              disabled={!!busy}
-              className="press flex h-12 w-12 items-center justify-center rounded-2xl bg-primary text-bg disabled:opacity-50"
-              aria-label="Traer enlace"
-            >
-              <Link2 className="size-5" />
-            </button>
-          </form>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              className="press flex h-12 items-center justify-center gap-2 rounded-2xl border border-border bg-surface text-sm"
-              onClick={() => fileRef.current?.click()}
-              disabled={!!busy}
-            >
-              <ImagePlus className="size-4" />
-              Del teléfono
-            </button>
-            <button
-              type="button"
-              className="press flex h-12 items-center justify-center gap-2 rounded-2xl border border-border bg-surface text-sm"
-              onClick={() => void onSample()}
-              disabled={!!busy}
-            >
-              <WandSparkles className="size-4" />
-              Ver ejemplo
-            </button>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*,video/*"
-              className="hidden"
-              onChange={(event) => {
-                void onFile(event.target.files?.[0]);
-                event.target.value = "";
-              }}
-            />
-          </div>
-
-          <div className="space-y-3 rounded-2xl border border-border bg-surface p-4">
-            <Toggle label="Quitar stickers y marcos" checked={stickers} onChange={setStickers} />
-            <Toggle label="Aspecto natural" checked={natural} onChange={setNatural} />
-            <Toggle
-              label="Refuerzo IA automático"
-              hint="Primero gratis y sin registro. Si falla o el cupo se acaba, sigue la cadena sola y el motor local siempre responde."
-              checked={boost}
-              onChange={setBoost}
-            />
-            <label className="block text-sm">
-              <span className="mb-2 flex justify-between text-muted">
-                Fuerza del natural
-                <span className="text-fg">{Math.round(strength * 100)}</span>
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={Math.round(strength * 100)}
-                onChange={(event) => setStrength(Number(event.target.value) / 100)}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-2 flex justify-between text-muted">
-                Sensibilidad de stickers
-                <span className="text-fg">{Math.round(sensitivity * 100)}</span>
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={Math.round(sensitivity * 100)}
-                onChange={(event) => setSensitivity(Number(event.target.value) / 100)}
-              />
-            </label>
-          </div>
-
-          {loaded?.kind === "photo" && loaded.raster && !resultUrl ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted">{loaded.label}</p>
-                <button
-                  type="button"
-                  className={`press flex h-11 items-center gap-2 rounded-full px-4 text-sm ${brushOn ? "bg-primary text-bg" : "border border-border bg-surface"}`}
-                  onClick={() => setBrushOn((value) => !value)}
-                >
-                  <Brush className="size-4" />
-                  Pincel
-                </button>
-              </div>
-              <div className="relative overflow-hidden rounded-2xl border border-border bg-bg">
-                <canvas
-                  ref={baseRef}
-                  width={loaded.raster.width}
-                  height={loaded.raster.height}
-                  className="block h-auto w-full"
-                />
-                <canvas
-                  ref={brushRef}
-                  width={loaded.raster.width}
-                  height={loaded.raster.height}
-                  className={`absolute inset-0 h-full w-full ${brushOn ? "touch-none" : "pointer-events-none"}`}
-                  onPointerDown={(event) => {
-                    if (!brushOn) return;
-                    drawing.current = true;
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    const pos = pointerPos(event);
-                    if (pos) drawBrush(pos.x, pos.y);
-                  }}
-                  onPointerMove={(event) => {
-                    if (!drawing.current || !brushOn) return;
-                    const pos = pointerPos(event);
-                    if (pos) drawBrush(pos.x, pos.y);
-                  }}
-                  onPointerUp={() => {
-                    drawing.current = false;
-                  }}
-                />
-              </div>
-              {brushOn ? <p className="text-xs text-muted">Pinta encima de lo que el detector no vea.</p> : null}
-            </div>
-          ) : null}
-
-          {loaded?.kind === "video" && !resultUrl ? (
-            <video src={loaded.sourceUrl} controls playsInline className="w-full rounded-2xl border border-border bg-bg" />
-          ) : null}
-
-          {resultUrl && loaded?.kind === "photo" ? (
-            <div className="space-y-2">
-              <p className="text-sm text-muted">
-                Arrastra para comparar. {covered > 0 ? `Capa gráfica: ${Math.round(covered * 1000) / 10}%` : "Sin capa gráfica marcada."}
-              </p>
-              <div
-                className="relative overflow-hidden rounded-2xl border border-border bg-bg"
-                style={{ aspectRatio: `${loaded.raster?.width ?? 1} / ${loaded.raster?.height ?? 1}` }}
-              >
-                <img src={resultUrl} alt="Foto restaurada" className="absolute inset-0 h-full w-full object-contain" />
-                <img
-                  src={loaded.sourceUrl}
-                  alt=""
-                  className="absolute inset-0 h-full w-full object-contain"
-                  style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }}
-                />
-                <input
-                  aria-label="Comparar antes y después"
-                  type="range"
-                  min={2}
-                  max={98}
-                  value={split}
-                  onChange={(event) => setSplit(Number(event.target.value))}
-                  className="absolute inset-x-4 bottom-4"
-                />
-              </div>
-            </div>
-          ) : null}
-
-          {resultUrl && loaded?.kind === "video" ? (
-            <div className="space-y-2">
-              <button
-                type="button"
-                className="press h-11 rounded-full border border-border px-4 text-sm"
-                onClick={() => setShowOriginal((value) => !value)}
-              >
-                {showOriginal ? "Ver limpio" : "Ver original"}
-              </button>
-              <video
-                src={showOriginal ? loaded.sourceUrl : resultUrl}
-                controls
-                playsInline
-                className="w-full rounded-2xl border border-border bg-bg"
-              />
-            </div>
-          ) : null}
-
-          {busy ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-sm text-muted">
-                <Loader2 className="size-4 animate-spin" />
-                {busy}
-              </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-surface">
-                <div className="h-full bg-primary transition-[width] duration-200" style={{ width: `${Math.round(progress * 100)}%` }} />
-              </div>
-            </div>
-          ) : null}
-          {error ? <p className="text-sm text-primary">{error}</p> : null}
-          {note ? <p className="text-sm text-muted">{note}</p> : null}
-
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={!loaded || !!busy}
-              onClick={() => void restore()}
-              className="press h-12 rounded-2xl bg-primary text-sm font-medium text-bg disabled:opacity-40"
-            >
-              Restaurar
-            </button>
-            <button
-              type="button"
-              disabled={!resultBlob}
-              onClick={download}
-              className="press flex h-12 items-center justify-center gap-2 rounded-2xl border border-border bg-surface text-sm disabled:opacity-40"
-            >
-              <Download className="size-4" />
-              Guardar
-            </button>
-          </div>
-          <p className="text-xs leading-relaxed text-muted">
-            Un filtro ya mezclado no se puede deshacer al pixel original. Esto recupera textura, aplana el color
-            excesivo y rellena stickers con lo que hay alrededor. No cambia ropa ni inventa otra persona, y no
-            convierte una foto en video.
-          </p>
-        </section>
+        <StudioTab
+          url={url}
+          onUrl={setUrl}
+          onSubmitUrl={onUrl}
+          urlStatus={urlStatus}
+          onPickFile={() => fileRef.current?.click()}
+          onSample={onSample}
+          stickers={stickers}
+          setStickers={setStickers}
+          natural={natural}
+          setNatural={setNatural}
+          boost={boost}
+          setBoost={setBoost}
+          strength={strength}
+          setStrength={setStrength}
+          sensitivity={sensitivity}
+          setSensitivity={setSensitivity}
+          loaded={loaded}
+          baseRef={baseRef}
+          brushRef={brushRef}
+          brushOn={brushOn}
+          setBrushOn={setBrushOn}
+          drawing={drawing}
+          pointerPos={pointerPos}
+          drawBrush={drawBrush}
+          resultUrl={resultUrl}
+          covered={covered}
+          split={split}
+          setSplit={setSplit}
+          showOriginal={showOriginal}
+          setShowOriginal={setShowOriginal}
+          fileRef={fileRef}
+          onFile={onFile}
+          busy={busy}
+          progress={progress}
+          error={error}
+          note={note}
+          restoreStatus={restoreStatus}
+          onRestore={restore}
+          onDownload={download}
+          resultBlob={resultBlob}
+        />
       ) : null}
 
       {tab === "history" ? (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-2xl">En este teléfono</h2>
-            <button
-              type="button"
-              className="press flex h-11 items-center gap-2 rounded-full border border-border px-3 text-sm"
-              onClick={() => {
-                clearHistory();
-                setHistory([]);
-              }}
-            >
-              <Trash2 className="size-4" />
-              Borrar
-            </button>
-          </div>
-          {history.length === 0 ? (
-            <p className="rounded-2xl border border-border bg-surface p-4 text-sm text-muted">
-              Todavía no hay restauraciones guardadas aquí. El historial no sale de este aparato.
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {history.map((item) => (
-                <li key={item.id} className="flex items-center gap-3 rounded-2xl border border-border bg-surface p-2">
-                  <img src={item.thumb} alt="" className="size-16 rounded-xl object-cover" />
-                  <div className="min-w-0">
-                    <p className="truncate text-sm">{item.label}</p>
-                    <p className="text-xs text-muted">
-                      {item.kind === "video" ? "Video" : "Foto"} ·{" "}
-                      {item.engine === "cloud" ? "nube de pago" : item.engine === "free" ? "refuerzo gratis" : "local"} ·{" "}
-                      {new Date(item.at).toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" })}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <HistoryTab
+          history={history}
+          onClear={() => {
+            clearHistory();
+            setHistory([]);
+            toast.push({ tone: "info", title: "Historial borrado", body: "Solo en este teléfono." });
+          }}
+          onRemove={(id) => {
+            const next = readHistory().filter((h) => h.id !== id);
+            writeHistory(next);
+            setHistory(next);
+            toast.push({ tone: "info", title: "Ítem borrado", body: "Solo en este teléfono." });
+          }}
+        />
       ) : null}
 
       {tab === "info" ? (
-        <section className="space-y-4">
-          <div className="rounded-2xl border border-border bg-surface p-4">
-            <div className="mb-3 flex items-center gap-2">
-              <Smartphone className="size-5 text-primary" />
-              <h2 className="font-display text-2xl">Instalar</h2>
-            </div>
-            <p className="mb-3 text-sm text-muted">
-              Es una app instalable, no una página suelta. En iPhone: Compartir y luego Agregar a inicio. En Android:
-              el menú del navegador y luego Instalar.
-            </p>
-            {qr && installable && qr.svg.startsWith("<svg") && !qr.svg.includes("<script") ? (
-              <div className="flex flex-col items-center gap-3">
-                <div className="w-48 rounded-2xl bg-fg p-3" dangerouslySetInnerHTML={{ __html: qr.svg }} />
-                <p className="text-center text-xs break-all text-muted">{qr.origin}</p>
-              </div>
-            ) : (
-              <p className="text-sm text-muted">
-                El código QR de instalación usa la dirección https de producción. Aparece aquí en cuanto la app está
-                publicada. Mientras tanto, ábrela desde este chat y usa Agregar a inicio cuando el enlace sea https.
-              </p>
-            )}
-          </div>
-
-          <article className="space-y-3 rounded-2xl border border-border bg-surface p-4 text-sm leading-relaxed">
-            <div className="flex items-center gap-2">
-              <Shield className="size-5 text-primary" />
-              <h2 className="font-display text-2xl">Privacidad</h2>
-            </div>
-            <p>La foto o el video se procesan en tu teléfono con un motor local, sin cuenta y sin registro.</p>
-            <p>
-              Si pegas un enlace, nuestro servidor solo lo descarga para saltar el bloqueo del navegador. No se guarda
-              el archivo ni la dirección. Se rechazan enlaces a redes internas.
-            </p>
-            <p>
-              El refuerzo IA es automático y empieza por lo gratis: apps públicas que no piden key ni registro. Solo
-              si nadie responde se usa la nube con cupo, y cuando el cupo se acaba la cadena vuelve sola al refuerzo
-              gratis y al motor local.
-            </p>
-            <p>
-              El historial (una miniatura y el nombre) vive en este aparato. Puedes borrarlo. En la base solo entran
-              conteos anónimos: foto o video, motor usado y duración. Sin imagen y sin enlace.
-            </p>
-            <p>No vendemos datos. No hay perfil. Filteroff no cambia la ropa ni inventa desnudos: eso no es quitar un filtro.</p>
-            {summary.length > 0 ? (
-              <ul className="text-xs text-muted">
-                {summary.map((row) => (
-                  <li key={`${row.kind}-${row.engine}`}>
-                    30 días · {row.kind === "video" ? "videos" : "fotos"} ·{" "}
-                    {row.engine === "cloud" ? "nube de pago" : row.engine === "free" ? "refuerzo gratis" : "local"} ·{" "}
-                    {row.n}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-xs text-muted">Aún no hay conteos de los últimos 30 días.</p>
-            )}
-          </article>
-
-          <article className="space-y-3 rounded-2xl border border-border bg-surface p-4 text-sm leading-relaxed">
-            <div className="flex items-center gap-2">
-              <Github className="size-5 text-primary" />
-              <h2 className="font-display text-2xl">Motor abierto</h2>
-            </div>
-            <p>
-              El motor del teléfono y la cadena de refuerzo gratis se apoyan en trabajo público de GitHub, copiado y
-              adaptado a esta app:
-            </p>
-            <ul className="list-disc space-y-1 pl-4 text-xs text-muted">
-              <li>gradio-app/gradio (MIT): protocolo para llamar apps públicas sin key ni registro.</li>
-              <li>GFPGAN y SwinIR (Apache-2.0): demos públicas de rostro y reconstrucción.</li>
-              <li>OpenCV y scikit-image (BSD): relleno de stickers, CLAHE y balance de grises.</li>
-              <li>Dark Channel Prior (Kaiming He): quita la veladura que dejan los filtros con glow.</li>
-            </ul>
-            <p className="text-xs text-muted">
-              Cadena automática: motor local (el teléfono) → refuerzo gratis (Spaces públicos) → nube con cupo (si
-              existe). Si un eslabón se queda sin cupo o está dormido, el siguiente entra solo, y el resultado
-              siempre llega.
-            </p>
-          </article>
-        </section>
+        <InfoTab qr={qr} installable={installable} summary={summary} />
       ) : null}
 
-      <nav className="dock fixed inset-x-0 bottom-0 z-10 border-t border-border bg-bg/95 backdrop-blur">
-        <div className="mx-auto grid max-w-lg grid-cols-3 px-2 pt-2">
-          <DockButton active={tab === "studio"} onClick={() => setTab("studio")} icon={<Aperture className="size-5" />} label="Estudio" />
-          <DockButton active={tab === "history"} onClick={() => setTab("history")} icon={<History className="size-5" />} label="Historial" />
-          <DockButton active={tab === "info"} onClick={() => setTab("info")} icon={<Shield className="size-5" />} label="Instalar" />
+      <nav className="dock fixed inset-x-0 bottom-0 z-10 border-t border-border bg-bg/85 backdrop-blur-xl">
+        <div className="mx-auto grid max-w-lg grid-cols-3 px-3 pt-2">
+          {TAB_ITEMS.map((item) => (
+            <DockButton
+              key={item.value}
+              active={tab === item.value}
+              onClick={() => setTab(item.value as Tab)}
+              icon={item.icon}
+              label={item.label}
+            />
+          ))}
         </div>
       </nav>
     </div>
@@ -732,40 +535,577 @@ function DockButton({
     <button
       type="button"
       onClick={onClick}
-      className={`press flex h-14 flex-col items-center justify-center gap-1 text-xs ${active ? "text-primary" : "text-muted"}`}
+      aria-current={active ? "page" : undefined}
+      className={[
+        "press relative flex h-14 flex-col items-center justify-center gap-1 rounded-2xl text-xs",
+        "transition-colors duration-200",
+        "focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
+        "touch-manipulation",
+        active ? "text-primary" : "text-muted hover:text-fg",
+      ].join(" ")}
     >
+      <span
+        aria-hidden="true"
+        className={[
+          "pointer-events-none absolute -top-0.5 h-1 w-8 rounded-full bg-primary transition-opacity duration-200",
+          active ? "opacity-100" : "opacity-0",
+        ].join(" ")}
+      />
       {icon}
       {label}
     </button>
   );
 }
 
-function Toggle({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string;
-  hint?: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
+function StudioTab(props: {
+  url: string;
+  onUrl: (v: string) => void;
+  onSubmitUrl: () => void;
+  urlStatus: PressStatus;
+  onPickFile: () => void;
+  onSample: () => void;
+  stickers: boolean;
+  setStickers: (v: boolean) => void;
+  natural: boolean;
+  setNatural: (v: boolean) => void;
+  boost: boolean;
+  setBoost: (v: boolean) => void;
+  strength: number;
+  setStrength: (v: number) => void;
+  sensitivity: number;
+  setSensitivity: (v: number) => void;
+  loaded: Loaded | null;
+  baseRef: React.RefObject<HTMLCanvasElement | null>;
+  brushRef: React.RefObject<HTMLCanvasElement | null>;
+  brushOn: boolean;
+  setBrushOn: (v: boolean) => void;
+  drawing: React.MutableRefObject<boolean>;
+  pointerPos: (event: PointerEvent<HTMLCanvasElement>) => { x: number; y: number } | null;
+  drawBrush: (x: number, y: number) => void;
+  resultUrl: string | null;
+  covered: number;
+  split: number;
+  setSplit: (v: number) => void;
+  showOriginal: boolean;
+  setShowOriginal: (v: boolean) => void;
+  fileRef: React.RefObject<HTMLInputElement | null>;
+  onFile: (file: File | undefined) => void;
+  busy: string | null;
+  progress: number;
+  error: string;
+  note: string;
+  restoreStatus: PressStatus;
+  onRestore: () => void;
+  onDownload: () => void;
+  resultBlob: Blob | null;
 }) {
+  const {
+    url,
+    onUrl,
+    onSubmitUrl,
+    urlStatus,
+    onPickFile,
+    onSample,
+    stickers,
+    setStickers,
+    natural,
+    setNatural,
+    boost,
+    setBoost,
+    strength,
+    setStrength,
+    sensitivity,
+    setSensitivity,
+    loaded,
+    baseRef,
+    brushRef,
+    brushOn,
+    setBrushOn,
+    drawing,
+    pointerPos,
+    drawBrush,
+    resultUrl,
+    covered,
+    split,
+    setSplit,
+    showOriginal,
+    setShowOriginal,
+    fileRef,
+    onFile,
+    busy,
+    progress,
+    error,
+    note,
+    restoreStatus,
+    onRestore,
+    onDownload,
+    resultBlob,
+  } = props;
+
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <p className="text-sm">{label}</p>
-        {hint ? <p className="text-xs text-muted">{hint}</p> : null}
+    <section className="space-y-5">
+      <Card tone="bg" padding="md" className="rise rise-3 overflow-hidden">
+        <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-primary/15 blur-3xl" />
+        <div className="relative">
+          <SectionHeader
+            eyebrow="Cuarto oscuro en línea"
+            title="Pegá un enlace o abrí un archivo"
+            subtitle="La foto o el video nunca sale del teléfono. Si pegás un enlace, el servidor solo lo descarga y se olvida."
+          />
+          <form
+            className="mt-4 flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmitUrl();
+            }}
+          >
+            <label className="sr-only" htmlFor="media-url">
+              Enlace de la foto o el video
+            </label>
+            <div className="relative min-w-0 flex-1">
+              <Link2 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" aria-hidden="true" />
+              <input
+                id="media-url"
+                value={url}
+                onChange={(event) => onUrl(event.target.value)}
+                placeholder="https://…"
+                inputMode="url"
+                autoCapitalize="off"
+                autoCorrect="off"
+                className="h-12 w-full rounded-2xl border border-border bg-surface pl-9 pr-3 text-sm outline-none transition-colors focus:border-primary"
+              />
+            </div>
+            <PressButton
+              type="submit"
+              status={urlStatus}
+              icon={<Link2 className="size-4" />}
+              label="Traer"
+              aria-label="Traer enlace"
+              variant="solid"
+              size="md"
+              disabled={!!busy}
+            />
+          </form>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <PressButton
+              type="button"
+              icon={<ImagePlus className="size-4" />}
+              label="Del teléfono"
+              onClick={onPickFile}
+              disabled={!!busy}
+            />
+            <PressButton
+              type="button"
+              icon={<WandSparkles className="size-4" />}
+              label="Ver ejemplo"
+              onClick={onSample}
+              disabled={!!busy}
+            />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*,video/*"
+              className="hidden"
+              onChange={(event) => {
+                onFile(event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+          </div>
+        </div>
+      </Card>
+
+      <Card padding="md" className="rise rise-4 space-y-3">
+        <SectionHeader
+          eyebrow="Ajustes"
+          title="Cómo querés que restaure"
+          trailing={
+            <div className="flex flex-wrap gap-1.5">
+              <Chip active icon={<Cpu className="size-3.5" />}>Local</Chip>
+              <Chip active={boost} icon={<Zap className="size-3.5" />}>Cadena IA</Chip>
+            </div>
+          }
+        />
+        <Toggle label="Quitar stickers y marcos" checked={stickers} onChange={setStickers} />
+        <Toggle label="Aspecto natural" checked={natural} onChange={setNatural} />
+        <Toggle
+          label="Refuerzo IA automático"
+          hint="Primero gratis y sin registro. Si falla o el cupo se acaba, sigue la cadena sola y el motor local siempre responde."
+          checked={boost}
+          onChange={setBoost}
+        />
+        <Slider
+          label="Fuerza del natural"
+          value={Math.round(strength * 100)}
+          min={0}
+          max={100}
+          onChange={(v) => setStrength(v / 100)}
+          format={(v) => `${v}`}
+        />
+        <Slider
+          label="Sensibilidad de stickers"
+          value={Math.round(sensitivity * 100)}
+          min={0}
+          max={100}
+          onChange={(v) => setSensitivity(v / 100)}
+          format={(v) => `${v}`}
+        />
+      </Card>
+
+      {loaded?.kind === "photo" && loaded.raster && !resultUrl ? (
+        <Card padding="sm" className="rise rise-5 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="truncate text-sm text-muted">{loaded.label}</p>
+            <PressButton
+              type="button"
+              icon={<Brush className="size-4" />}
+              label={brushOn ? "Pincel activo" : "Pincel"}
+              onClick={() => setBrushOn(!brushOn)}
+              variant={brushOn ? "solid" : "outline"}
+              size="sm"
+            />
+          </div>
+          <div className="relative overflow-hidden rounded-2xl border border-border bg-bg">
+            <canvas
+              ref={baseRef}
+              width={loaded.raster.width}
+              height={loaded.raster.height}
+              className="block h-auto w-full"
+            />
+            <canvas
+              ref={brushRef}
+              width={loaded.raster.width}
+              height={loaded.raster.height}
+              className={`absolute inset-0 h-full w-full ${brushOn ? "touch-none" : "pointer-events-none"}`}
+              onPointerDown={(event) => {
+                if (!brushOn) return;
+                drawing.current = true;
+                event.currentTarget.setPointerCapture(event.pointerId);
+                const pos = pointerPos(event);
+                if (pos) drawBrush(pos.x, pos.y);
+              }}
+              onPointerMove={(event) => {
+                if (!drawing.current || !brushOn) return;
+                const pos = pointerPos(event);
+                if (pos) drawBrush(pos.x, pos.y);
+              }}
+              onPointerUp={() => {
+                drawing.current = false;
+              }}
+            />
+          </div>
+          {brushOn ? (
+            <p className="text-xs text-muted">Pinta encima de lo que el detector no vea.</p>
+          ) : null}
+        </Card>
+      ) : null}
+
+      {loaded?.kind === "video" && !resultUrl ? (
+        <video src={loaded.sourceUrl} controls playsInline className="w-full rounded-2xl border border-border bg-bg" />
+      ) : null}
+
+      {resultUrl && loaded?.kind === "photo" ? (
+        <Card padding="sm" className="rise rise-5 space-y-2">
+          <p className="text-sm text-muted">
+            Arrastrá para comparar. {covered > 0 ? `Capa gráfica: ${Math.round(covered * 1000) / 10}%` : "Sin capa gráfica marcada."}
+          </p>
+          <CompareSlider
+            before={loaded.sourceUrl}
+            after={resultUrl}
+            afterAlt="Foto restaurada"
+            value={split}
+            onChange={setSplit}
+            aspectRatio={`${loaded.raster?.width ?? 1} / ${loaded.raster?.height ?? 1}`}
+          />
+        </Card>
+      ) : null}
+
+      {resultUrl && loaded?.kind === "video" ? (
+        <div className="rise rise-5 space-y-2">
+          <PressButton
+            type="button"
+            label={showOriginal ? "Ver limpio" : "Ver original"}
+            onClick={() => setShowOriginal(!showOriginal)}
+            variant="outline"
+            size="sm"
+          />
+          <video
+            src={showOriginal ? loaded.sourceUrl : resultUrl}
+            controls
+            playsInline
+            className="w-full rounded-2xl border border-border bg-bg"
+          />
+        </div>
+      ) : null}
+
+      {busy ? (
+        <div className="rise space-y-2">
+          <div className="flex items-center gap-2 text-sm text-muted">
+            <Loader2 className="size-4 animate-spin" />
+            {busy}
+          </div>
+          <div
+            className="h-1.5 overflow-hidden rounded-full bg-surface"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress * 100)}
+            aria-label="Progreso"
+          >
+            <div
+              className="h-full bg-gradient-to-r from-primary to-primary-2 transition-[width] duration-200"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="flex items-start gap-2 rounded-2xl border border-primary/30 bg-primary/10 p-3 text-sm text-primary" role="alert">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <p>{error}</p>
+        </div>
+      ) : null}
+
+      {note && !error ? (
+        <div className="flex items-start gap-2 rounded-2xl border border-border bg-surface p-3 text-sm text-muted">
+          <Info className="mt-0.5 size-4 shrink-0 text-primary" />
+          <p>{note}</p>
+        </div>
+      ) : null}
+
+      <div className="rise rise-6 grid grid-cols-2 gap-2">
+        <PressButton
+          type="button"
+          status={restoreStatus}
+          onClick={onRestore}
+          label={restoreStatus === "loading" ? "Restaurando…" : "Restaurar"}
+          variant="solid"
+          size="lg"
+          disabled={!loaded || !!busy}
+          icon={<Shuffle className="size-4" />}
+        />
+        <PressButton
+          type="button"
+          onClick={onDownload}
+          label="Guardar"
+          variant="outline"
+          size="lg"
+          disabled={!resultBlob}
+          icon={<Download className="size-4" />}
+        />
       </div>
-      <Switch.Root
-        checked={checked}
-        onCheckedChange={onChange}
-        aria-label={label}
-        className="press relative h-7 w-12 shrink-0 rounded-full border border-border bg-bg data-[state=checked]:border-primary data-[state=checked]:bg-primary"
-      >
-        <Switch.Thumb className="block size-5 translate-x-1 rounded-full bg-fg transition-transform duration-200 ease-out data-[state=checked]:translate-x-6 data-[state=checked]:bg-bg" />
-      </Switch.Root>
-    </div>
+
+      <div className="rise rise-7 rounded-2xl border border-border bg-surface/60 p-4 text-xs leading-relaxed text-muted">
+        <p className="mb-2 font-medium text-fg">Lo que esta app no hace</p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>No convierte fotos en videos ni videos en fotos.</li>
+          <li>No cambia la ropa ni inventa otra persona.</li>
+          <li>No sube tu foto a un servidor sin pedirlo el refuerzo IA.</li>
+          <li>No reemplaza al original: solo suaviza el filtro y rellena stickers.</li>
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function HistoryTab({ history, onClear, onRemove }: { history: HistoryItem[]; onClear: () => void; onRemove: (id: string) => void }) {
+  return (
+    <section className="space-y-4">
+      <SectionHeader
+        eyebrow="Solo en este teléfono"
+        title="En este teléfono"
+        subtitle="Miniaturas y etiquetas. Nada sale del aparato."
+        trailing={
+          history.length > 0 ? (
+            <PressButton
+              type="button"
+              onClick={onClear}
+              icon={<Trash2 className="size-4" />}
+              label="Borrar todo"
+              variant="ghost"
+              size="sm"
+            />
+          ) : undefined
+        }
+      />
+      {history.length === 0 ? (
+        <Card padding="lg" className="rise rise-3 text-center">
+          <HistoryIcon className="mx-auto mb-2 size-8 text-muted" />
+          <p className="text-sm text-muted">
+            Todavía no hay restauraciones guardadas aquí. El historial no sale de este aparato.
+          </p>
+        </Card>
+      ) : (
+        <ul className="space-y-2">
+          {history.map((item) => (
+            <SwipeReveal
+              key={item.id}
+              actions={[
+                {
+                  label: `Borrar ${item.label}`,
+                  tone: "danger",
+                  onSelect: () => onRemove(item.id),
+                  icon: <Trash2 className="size-4" />,
+                },
+              ]}
+            >
+              <div className="flex items-center gap-3 p-2">
+                <img src={item.thumb} alt="" className="size-16 rounded-xl object-cover" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">{item.label}</p>
+                  <p className="text-xs text-muted">
+                    {item.kind === "video" ? "Video" : "Foto"} ·{" "}
+                    {item.engine === "cloud" ? "nube" : item.engine === "free" ? "gratis" : "local"} ·{" "}
+                    {new Date(item.at).toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" })}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Borrar ${item.label}`}
+                  onClick={() => onRemove(item.id)}
+                  className="press flex h-9 w-9 items-center justify-center rounded-full text-muted transition-colors hover:bg-primary/10 hover:text-primary"
+                >
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
+            </SwipeReveal>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function InfoTab({
+  qr,
+  installable,
+  summary,
+}: {
+  qr: { origin: string; svg: string } | null;
+  installable: boolean;
+  summary: { kind: string; engine: string; n: number }[];
+}) {
+  const ENGINE_LABEL: Record<string, string> = {
+    cloud: "nube de pago",
+    free: "refuerzo gratis",
+    local: "motor local",
+  };
+  return (
+    <section className="space-y-4">
+      <SectionHeader
+        eyebrow="Cuarto oscuro abierto"
+        title="Instalar, reforzar y entender qué pasa"
+        subtitle="Sin cuenta. Sin muros. La foto o el video se procesan en tu teléfono."
+      />
+
+      <SnapCarousel ariaLabel="Capacidades de la app" peek>
+        <Card padding="md" emphasis="glow" className="h-full">
+          <div className="flex items-center gap-2 text-primary">
+            <Cpu className="size-5" />
+            <h2 className="font-display text-xl text-fg">Motor local</h2>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            Detecta capas gráficas, rellena stickers y aplana el color en tu propio teléfono. La foto no sale.
+          </p>
+        </Card>
+        <Card padding="md" className="h-full">
+          <div className="flex items-center gap-2 text-primary">
+            <Zap className="size-5" />
+            <h2 className="font-display text-xl text-fg">Cadena IA</h2>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            Primero gratis y sin registro (apps Gradio públicas). Si falla, salta a la nube con cupo. Si se acaba, vuelve a local.
+          </p>
+        </Card>
+        <Card padding="md" className="h-full">
+          <div className="flex items-center gap-2 text-primary">
+            <Lock className="size-5" />
+            <h2 className="font-display text-xl text-fg">Privacidad primero</h2>
+          </div>
+          <p className="mt-2 text-sm text-muted">
+            El historial vive en tu teléfono. La base solo recibe conteos anónimos. Vos sos responsable de lo que proceses.
+          </p>
+        </Card>
+      </SnapCarousel>
+
+      <Card padding="md" className="rise rise-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Smartphone className="size-5 text-primary" />
+            <h2 className="font-display text-xl">Llevar en el bolsillo</h2>
+          </div>
+          <Link
+            to="/qr"
+            className="press inline-flex h-9 items-center gap-1 rounded-full border border-border bg-bg/60 px-3 text-xs text-fg transition-colors hover:text-primary"
+          >
+            Ver QR
+            <ChevronRight className="size-3.5" />
+          </Link>
+        </div>
+        <p className="text-sm text-muted">
+          Es una app instalable, no una página suelta. En iPhone: Compartir y luego Agregar a inicio. En Android:
+          el menú del navegador y luego Instalar app.
+        </p>
+        {installable && qr?.svg ? (
+          <div className="flex items-center gap-3">
+            <div className="w-24 rounded-xl bg-fg p-1.5">
+              <img
+                src={`data:image/svg+xml;base64,${toBase64(qr.svg)}`}
+                alt={`Código QR para ${qr.origin}`}
+                className="h-auto w-full"
+                width={96}
+                height={96}
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm text-fg">{qr.origin}</p>
+              <p className="text-xs text-muted">Escaneá con la cámara del teléfono.</p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted">
+            El código QR aparece cuando la app está publicada en una dirección https. Mientras tanto, abran la app en el navegador y usen "Agregar a inicio".
+          </p>
+        )}
+      </Card>
+
+      <Card padding="md" className="rise rise-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Eye className="size-5 text-primary" />
+          <h2 className="font-display text-xl">Tu responsabilidad</h2>
+        </div>
+        <p className="text-sm text-muted">
+          <strong className="text-fg">El uso de Filteroff es responsabilidad de la persona que usa la app.</strong> Procesá solo
+          archivos sobre los que tengas derecho a editar y respetá la privacidad e imagen de otras personas.
+        </p>
+        <Link
+          to="/privacidad"
+          className="press inline-flex h-9 items-center gap-1 rounded-full border border-border bg-bg/60 px-3 text-xs text-fg transition-colors hover:text-primary"
+        >
+          Leer la política completa
+          <ChevronRight className="size-3.5" />
+        </Link>
+      </Card>
+
+      {summary.length > 0 ? (
+        <Card padding="md" className="rise rise-5">
+          <p className="mb-2 text-xs uppercase tracking-widest text-muted">Últimos 30 días</p>
+          <ul className="space-y-1 text-sm">
+            {summary.map((row) => (
+              <li key={`${row.kind}-${row.engine}`} className="flex items-center justify-between">
+                <span className="text-fg">
+                  {row.kind === "video" ? "Videos" : "Fotos"} · {ENGINE_LABEL[row.engine] ?? row.engine}
+                </span>
+                <span className="font-mono text-primary">{row.n}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
+    </section>
   );
 }
 
@@ -793,4 +1133,9 @@ async function blobToThumb(blob: Blob): Promise<string> {
   } finally {
     bitmap.close();
   }
+}
+
+function toBase64(input: string): string {
+  if (typeof btoa === "function") return btoa(unescape(encodeURIComponent(input)));
+  return Buffer.from(input, "utf-8").toString("base64");
 }

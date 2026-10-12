@@ -4,7 +4,7 @@ const MAX_BYTES = 8_000_000;
 
 export class MediaReject extends Error {}
 
-function isPrivateAddress(address: string): boolean {
+export function isPrivateAddress(address: string): boolean {
   const v4 = address.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
   if (v4) {
     const a = Number(v4[1]);
@@ -87,6 +87,31 @@ export function sniffMedia(bytes: Uint8Array, headerType: string): { mime: strin
   }
   if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return { mime: "video/webm", kind: "video" };
   return null;
+}
+
+/**
+ * Devuelve la dirección resuelta para una URL. La cache por proceso evita
+ * resolver el mismo host miles de veces en un burst y, sobre todo, fija la
+ * IP validada como privada para que un atacante que controle el DNS no pueda
+ * alternar entre una IP pública y una privada entre la validación y la
+ * petición real (TOCTOU).
+ */
+const resolvedCache = new Map<string, { address: string; expires: number }>();
+const RESOLVED_TTL_MS = 60_000;
+
+export async function assertPublicResolved(raw: string): Promise<{ url: URL; address: string }> {
+  const url = await assertPublicHttpUrl(raw);
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const cached = resolvedCache.get(host);
+  if (cached && cached.expires > Date.now()) {
+    return { url, address: cached.address };
+  }
+  const records = await lookup(host, { all: true });
+  if (records.length === 0) throw new MediaReject("No se pudo resolver el enlace.");
+  const publicRecord = records.find((r) => !isPrivateAddress(r.address));
+  if (!publicRecord) throw new MediaReject("Ese destino no está permitido.");
+  resolvedCache.set(host, { address: publicRecord.address, expires: Date.now() + RESOLVED_TTL_MS });
+  return { url, address: publicRecord.address };
 }
 
 /**

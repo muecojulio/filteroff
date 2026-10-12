@@ -150,6 +150,10 @@ export default defineConfig(({ command, isPreview }) => ({
     host: "0.0.0.0",
     port: 8080,
     strictPort: true,
+    // Aceptar hosts arbitrarios para que la previsualización del sandbox (e2b)
+    // pueda cargar la app. Endurecemos CORS en producción con `connect-src` en
+    // la CSP; este `allowedHosts` es solo para el dev server.
+    allowedHosts: true,
   },
   preview: {
     host: "127.0.0.1",

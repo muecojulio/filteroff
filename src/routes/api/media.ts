@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { MediaReject, assertPublicHttpUrl, findHtmlMediaUrl, readCapped, sniffMedia } from "@/server/safe-url";
+import { MediaReject, assertPublicResolved, findHtmlMediaUrl, readCapped, sniffMedia } from "@/server/safe-url";
 
 async function pull(raw: string): Promise<Response> {
   let current = raw;
   for (let hop = 0; hop < 5; hop++) {
-    const url = await assertPublicHttpUrl(current);
+    // assertPublicResolved fija la IP pública validada; si entre un hop y el
+    // siguiente el DNS cambia, también falla.
+    const { url } = await assertPublicResolved(current);
     const response = await fetch(url, {
       redirect: "manual",
       headers: {
